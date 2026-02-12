@@ -1,0 +1,100 @@
+---
+# Istio Role - Service Mesh Configuration
+
+- name: Download Istio
+  unarchive:
+    src: "https://github.com/istio/istio/releases/download/{{ istio_version }}/istio-{{ istio_version }}-linux-amd64.tar.gz"
+    dest: /opt
+    remote_src: yes
+    creates: "/opt/istio-{{ istio_version }}"
+
+- name: Create istioctl symlink
+  file:
+    src: "/opt/istio-{{ istio_version }}/bin/istioctl"
+    dest: /usr/local/bin/istioctl
+    state: link
+    force: yes
+
+- name: Install Istio
+  shell: |
+    istioctl install --set profile={{ istio_profile }} -y
+  args:
+    creates: /var/lib/istio
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Enable sidecar injection for default namespace
+  shell: |
+    kubectl label namespace default istio-injection=enabled --overwrite
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+  ignore_errors: yes
+
+- name: Install Istio addons
+  shell: |
+    kubectl apply -f /opt/istio-{{ istio_version }}/samples/addons/
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+  ignore_errors: yes
+
+- name: Wait for Istio components
+  shell: |
+    kubectl wait --for=condition=ready pod -l app=istiod -n istio-system --timeout=300s
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+  ignore_errors: yes
+
+- name: Configure Istio Gateway
+  template:
+    src: gateway.yaml.j2
+    dest: /tmp/istio-gateway.yaml
+
+- name: Apply Istio Gateway
+  shell: |
+    kubectl apply -f /tmp/istio-gateway.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure Istio Destination Rules
+  template:
+    src: destination-rules.yaml.j2
+    dest: /tmp/istio-destination-rules.yaml
+
+- name: Apply Istio Destination Rules
+  shell: |
+    kubectl apply -f /tmp/istio-destination-rules.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure Istio Virtual Services
+  template:
+    src: virtual-services.yaml.j2
+    dest: /tmp/istio-virtual-services.yaml
+
+- name: Apply Istio Virtual Services
+  shell: |
+    kubectl apply -f /tmp/istio-virtual-services.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure Istio Peer Authentication (mTLS)
+  template:
+    src: peer-authentication.yaml.j2
+    dest: /tmp/istio-peer-authentication.yaml
+
+- name: Apply Istio Peer Authentication
+  shell: |
+    kubectl apply -f /tmp/istio-peer-authentication.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure Istio Authorization Policies
+  template:
+    src: authorization-policy.yaml.j2
+    dest: /tmp/istio-authorization-policy.yaml
+
+- name: Apply Istio Authorization Policies
+  shell: |
+    kubectl apply -f /tmp/istio-authorization-policy.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"

@@ -1,0 +1,102 @@
+---
+# Monitoring Role - Observability Stack Configuration
+
+- name: Add Helm repositories
+  shell: |
+    helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+    helm repo add grafana https://grafana.github.io/helm-charts
+    helm repo add jaegertracing https://jaegertracing.github.io/helm-charts
+    helm repo update
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Create monitoring namespace
+  shell: |
+    kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Install Prometheus
+  shell: |
+    helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+      --namespace monitoring \
+      --set prometheus.prometheusSpec.retention=7d \
+      --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resources.requests.storage=50Gi \
+      --set grafana.enabled=true \
+      --set grafana.adminPassword=admin123 \
+      --wait
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Install Jaeger
+  shell: |
+    helm upgrade --install jaeger jaegertracing/jaeger \
+      --namespace monitoring \
+      --set provisionDataStore.cassandra=false \
+      --set storage.type=memory \
+      --set allInOne.enabled=true \
+      --wait
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Install Kiali
+  shell: |
+    kubectl apply -f https://raw.githubusercontent.com/istio/istio/release-1.20/samples/addons/kiali.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+  ignore_errors: yes
+
+- name: Configure Prometheus ServiceMonitor for Istio
+  template:
+    src: servicemonitor-istio.yaml.j2
+    dest: /tmp/servicemonitor-istio.yaml
+
+- name: Apply Istio ServiceMonitor
+  shell: |
+    kubectl apply -f /tmp/servicemonitor-istio.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure Grafana dashboards
+  template:
+    src: grafana-dashboards.yaml.j2
+    dest: /tmp/grafana-dashboards.yaml
+
+- name: Apply Grafana dashboards
+  shell: |
+    kubectl apply -f /tmp/grafana-dashboards.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure Alertmanager
+  template:
+    src: alertmanager-config.yaml.j2
+    dest: /tmp/alertmanager-config.yaml
+
+- name: Apply Alertmanager configuration
+  shell: |
+    kubectl apply -f /tmp/alertmanager-config.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure Prometheus rules
+  template:
+    src: prometheus-rules.yaml.j2
+    dest: /tmp/prometheus-rules.yaml
+
+- name: Apply Prometheus rules
+  shell: |
+    kubectl apply -f /tmp/prometheus-rules.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Expose Grafana via Ingress
+  template:
+    src: grafana-ingress.yaml.j2
+    dest: /tmp/grafana-ingress.yaml
+
+- name: Apply Grafana Ingress
+  shell: |
+    kubectl apply -f /tmp/grafana-ingress.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"

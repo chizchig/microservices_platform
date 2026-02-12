@@ -1,0 +1,118 @@
+---
+# Security Role - Security Configuration
+
+- name: Install Falco
+  shell: |
+    helm repo add falcosecurity https://falcosecurity.github.io/charts
+    helm repo update
+    helm upgrade --install falco falcosecurity/falco \
+      --namespace falco \
+      --create-namespace \
+      --set driver.kind=modern-bpf \
+      --set tty=true \
+      --wait
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+  when: enable_falco
+
+- name: Install OPA Gatekeeper
+  shell: |
+    helm repo add gatekeeper https://open-policy-agent.github.io/gatekeeper/charts
+    helm repo update
+    helm upgrade --install gatekeeper gatekeeper/gatekeeper \
+      --namespace gatekeeper-system \
+      --create-namespace \
+      --wait
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure OPA Constraints
+  template:
+    src: opa-constraints.yaml.j2
+    dest: /tmp/opa-constraints.yaml
+
+- name: Apply OPA Constraints
+  shell: |
+    kubectl apply -f /tmp/opa-constraints.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure Network Policies
+  template:
+    src: network-policies.yaml.j2
+    dest: /tmp/network-policies.yaml
+
+- name: Apply Network Policies
+  shell: |
+    kubectl apply -f /tmp/network-policies.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+  when: enable_network_policies
+
+- name: Configure Pod Security Standards
+  template:
+    src: pod-security.yaml.j2
+    dest: /tmp/pod-security.yaml
+
+- name: Apply Pod Security Standards
+  shell: |
+    kubectl apply -f /tmp/pod-security.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure RBAC
+  template:
+    src: rbac.yaml.j2
+    dest: /tmp/rbac.yaml
+
+- name: Apply RBAC
+  shell: |
+    kubectl apply -f /tmp/rbac.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure Cert-Manager
+  shell: |
+    helm repo add jetstack https://charts.jetstack.io
+    helm repo update
+    helm upgrade --install cert-manager jetstack/cert-manager \
+      --namespace cert-manager \
+      --create-namespace \
+      --set installCRDs=true \
+      --wait
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure Cluster Issuer
+  template:
+    src: cluster-issuer.yaml.j2
+    dest: /tmp/cluster-issuer.yaml
+
+- name: Apply Cluster Issuer
+  shell: |
+    kubectl apply -f /tmp/cluster-issuer.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure Sealed Secrets
+  shell: |
+    helm repo add sealed-secrets https://bitnami-labs.github.io/sealed-secrets
+    helm repo update
+    helm upgrade --install sealed-secrets sealed-secrets/sealed-secrets \
+      --namespace kube-system \
+      --wait
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Configure Vault (optional)
+  shell: |
+    helm repo add hashicorp https://helm.releases.hashicorp.com
+    helm repo update
+    helm upgrade --install vault hashicorp/vault \
+      --namespace vault \
+      --create-namespace \
+      --set "server.dev.enabled=true" \
+      --wait
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+  ignore_errors: yes

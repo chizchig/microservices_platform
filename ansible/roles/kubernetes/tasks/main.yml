@@ -1,0 +1,132 @@
+---
+# Kubernetes Role - Kubernetes node configuration
+
+- name: Add Kubernetes GPG key
+  apt_key:
+    url: "https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/Release.key"
+    keyring: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Add Kubernetes repository
+  apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/ /"
+    state: present
+    filename: kubernetes
+  when: ansible_os_family == "Debian"
+
+- name: Install Kubernetes packages
+  apt:
+    name:
+      - kubelet
+      - kubeadm
+      - kubectl
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Hold Kubernetes packages
+  dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubelet
+    - kubeadm
+    - kubectl
+
+- name: Configure kubelet
+  template:
+    src: kubelet-config.yaml.j2
+    dest: /etc/default/kubelet
+  notify: restart kubelet
+
+- name: Initialize Kubernetes master (first master only)
+  shell: |
+    kubeadm init \
+      --pod-network-cidr={{ pod_network_cidr }} \
+      --service-cidr={{ service_cidr }} \
+      --control-plane-endpoint={{ groups['k8s_master'][0] }}:6443 \
+      --upload-certs \
+      --kubernetes-version={{ kubernetes_version }} \
+      --ignore-preflight-errors=NumCPU,Mem
+  args:
+    creates: /etc/kubernetes/admin.conf
+  when: 
+    - inventory_hostname == groups['k8s_master'][0]
+    - groups['k8s_master'].index(inventory_hostname) == 0
+
+- name: Create .kube directory
+  file:
+    path: "{{ ansible_env.HOME }}/.kube"
+    state: directory
+    mode: '0755'
+
+- name: Copy admin.conf to user's kube config
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: "{{ ansible_env.HOME }}/.kube/config"
+    remote_src: yes
+    mode: '0600'
+  when: inventory_hostname in groups['k8s_master']
+
+- name: Install Calico CNI (first master only)
+  shell: |
+    kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.26.1/manifests/calico.yaml
+  args:
+    creates: /etc/cni/net.d/10-calico.conflist
+  when: 
+    - inventory_hostname == groups['k8s_master'][0]
+    - kubernetes_cni == "calico"
+
+- name: Get join command for additional masters
+  shell: kubeadm token create --print-join-command --certificate-key $(kubeadm init phase upload-certs --upload-certs | tail -1)
+  register: kubeadm_join_command_master
+  when: 
+    - inventory_hostname == groups['k8s_master'][0]
+    - groups['k8s_master'] | length > 1
+  run_once: true
+
+- name: Join additional master nodes
+  shell: "{{ hostvars[groups['k8s_master'][0]]['kubeadm_join_command_master'].stdout }} --control-plane"
+  args:
+    creates: /etc/kubernetes/kubelet.conf
+  when:
+    - inventory_hostname in groups['k8s_master']
+    - inventory_hostname != groups['k8s_master'][0]
+
+- name: Get join command for workers
+  shell: kubeadm token create --print-join-command
+  register: kubeadm_join_command_worker
+  when: 
+    - inventory_hostname == groups['k8s_master'][0]
+    - groups['k8s_workers'] | length > 0
+  run_once: true
+
+- name: Join worker nodes
+  shell: "{{ hostvars[groups['k8s_master'][0]]['kubeadm_join_command_worker'].stdout }}"
+  args:
+    creates: /etc/kubernetes/kubelet.conf
+  when:
+    - inventory_hostname in groups['k8s_workers']
+
+- name: Enable and start kubelet
+  service:
+    name: kubelet
+    state: started
+    enabled: yes
+
+- name: Label nodes (first master only)
+  shell: |
+    kubectl label node {{ item }} node-role.kubernetes.io/worker=worker --overwrite || true
+  loop: "{{ groups['k8s_workers'] }}"
+  when: 
+    - inventory_hostname == groups['k8s_master'][0]
+    - groups['k8s_workers'] | length > 0
+  ignore_errors: yes
+
+- name: Taint master nodes (optional)
+  shell: |
+    kubectl taint node {{ inventory_hostname }} node-role.kubernetes.io/control-plane:NoSchedule --overwrite
+  when: 
+    - inventory_hostname in groups['k8s_master']
+    - not (groups['k8s_workers'] | length > 0)
+  ignore_errors: yes

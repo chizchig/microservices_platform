@@ -1,0 +1,51 @@
+---
+# Main Ansible Playbook for Microservices Platform
+# This playbook configures all nodes in the microservices platform
+
+- name: Configure Common Settings
+  hosts: all
+  become: yes
+  roles:
+    - common
+  tags:
+    - common
+
+- name: Configure Docker
+  hosts: k8s_nodes
+  become: yes
+  roles:
+    - docker
+  tags:
+    - docker
+
+- name: Configure Kubernetes
+  hosts: k8s_nodes
+  become: yes
+  roles:
+    - kubernetes
+  tags:
+    - kubernetes
+
+- name: Configure Istio Service Mesh
+  hosts: k8s_master
+  become: yes
+  roles:
+    - istio
+  tags:
+    - istio
+
+- name: Configure Monitoring
+  hosts: k8s_master
+  become: yes
+  roles:
+    - monitoring
+  tags:
+    - monitoring
+
+- name: Configure Security
+  hosts: k8s_master
+  become: yes
+  roles:
+    - security
+  tags:
+    - security

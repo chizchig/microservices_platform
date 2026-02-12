@@ -1,0 +1,112 @@
+---
+# Application Configuration ConfigMaps
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-gateway-config
+  namespace: api-gateway
+data:
+  APP_NAME: "api-gateway"
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+  PORT: "8080"
+  RATE_LIMIT_REQUESTS: "1000"
+  RATE_LIMIT_WINDOW: "60"
+  TIMEOUT: "30"
+  MAX_CONNECTIONS: "10000"
+  ENABLE_CORS: "true"
+  CORS_ORIGINS: "*"
+  ENABLE_COMPRESSION: "true"
+  ENABLE_REQUEST_LOGGING: "true"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: user-service-config
+  namespace: user-service
+data:
+  APP_NAME: "user-service"
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+  PORT: "8080"
+  DB_POOL_SIZE: "20"
+  DB_POOL_TIMEOUT: "30"
+  REDIS_POOL_SIZE: "10"
+  JWT_EXPIRY_HOURS: "24"
+  REFRESH_TOKEN_EXPIRY_DAYS: "7"
+  ENABLE_2FA: "true"
+  PASSWORD_MIN_LENGTH: "12"
+  MAX_LOGIN_ATTEMPTS: "5"
+  LOCKOUT_DURATION_MINUTES: "30"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: order-service-config
+  namespace: order-service
+data:
+  APP_NAME: "order-service"
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+  PORT: "8080"
+  DB_POOL_SIZE: "20"
+  DB_POOL_TIMEOUT: "30"
+  REDIS_POOL_SIZE: "10"
+  ORDER_TIMEOUT_MINUTES: "30"
+  MAX_ORDER_ITEMS: "100"
+  ENABLE_INVENTORY_CHECK: "true"
+  ENABLE_PAYMENT_VALIDATION: "true"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: payment-service-config
+  namespace: payment-service
+data:
+  APP_NAME: "payment-service"
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+  PORT: "8080"
+  DB_POOL_SIZE: "10"
+  DB_POOL_TIMEOUT: "30"
+  PAYMENT_TIMEOUT_MINUTES: "10"
+  MAX_PAYMENT_AMOUNT: "100000"
+  ENABLE_FRAUD_DETECTION: "true"
+  WEBHOOK_RETRY_ATTEMPTS: "3"
+  WEBHOOK_TIMEOUT_SECONDS: "30"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: inventory-service-config
+  namespace: inventory-service
+data:
+  APP_NAME: "inventory-service"
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+  PORT: "8080"
+  DB_POOL_SIZE: "20"
+  DB_POOL_TIMEOUT: "30"
+  REDIS_POOL_SIZE: "10"
+  LOW_STOCK_THRESHOLD: "10"
+  ENABLE_STOCK_ALERTS: "true"
+  CACHE_TTL_SECONDS: "300"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: notification-service-config
+  namespace: notification-service
+data:
+  APP_NAME: "notification-service"
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+  PORT: "8080"
+  SMTP_HOST: "smtp.example.com"
+  SMTP_PORT: "587"
+  SMTP_TLS: "true"
+  SMS_PROVIDER: "twilio"
+  PUSH_PROVIDER: "firebase"
+  WEBHOOK_TIMEOUT_SECONDS: "30"
+  MAX_RETRY_ATTEMPTS: "3"
+  RATE_LIMIT_PER_MINUTE: "100"

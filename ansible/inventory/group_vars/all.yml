@@ -1,0 +1,37 @@
+---
+# Global Variables for All Hosts
+
+# Environment
+environment: dev
+cluster_name: microservices-dev
+
+# AWS Configuration
+aws_region: us-west-2
+
+# Kubernetes Configuration
+kubernetes_version: "1.29"
+kubernetes_cni: calico
+
+# Container Runtime
+container_runtime: containerd
+
+# Network Configuration
+pod_network_cidr: "10.244.0.0/16"
+service_cidr: "10.96.0.0/12"
+
+# Istio Configuration
+istio_version: "1.20.0"
+istio_profile: demo
+
+# Monitoring Configuration
+prometheus_version: "v2.48.0"
+grafana_version: "10.2.0"
+jaeger_version: "1.50.0"
+
+# Security Configuration
+enable_network_policies: true
+enable_pod_security_policies: true
+enable_falco: true
+
+# Backup Configuration
+backup_retention_days: 7

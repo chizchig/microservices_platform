@@ -1,0 +1,71 @@
+---
+# Namespaces for Microservices Platform
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: microservices
+  labels:
+    istio-injection: enabled
+    environment: production
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: api-gateway
+  labels:
+    istio-injection: enabled
+    environment: production
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: user-service
+  labels:
+    istio-injection: enabled
+    environment: production
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: order-service
+  labels:
+    istio-injection: enabled
+    environment: production
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: payment-service
+  labels:
+    istio-injection: enabled
+    environment: production
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: inventory-service
+  labels:
+    istio-injection: enabled
+    environment: production
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: notification-service
+  labels:
+    istio-injection: enabled
+    environment: production
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    environment: production
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: logging
+  labels:
+    environment: production
