@@ -1,0 +1,372 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: microservices-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    environment: production
+    project: microservices
+  annotations:
+    notifications.argoproj.io/subscribe.on-sync-succeeded.slack: deployments
+    notifications.argoproj.io/subscribe.on-sync-failed.slack: deployments
+    notifications.argoproj.io/subscribe.on-health-degraded.slack: alerts
+spec:
+  project: microservices
+  
+  source:
+    repoURL: https://github.com/your-org/microservices-platform.git
+    targetRevision: main
+    path: kubernetes/overlays/prod
+    
+    kustomize:
+      namePrefix: prod-
+      commonLabels:
+        environment: production
+      images:
+        - name: microservices/api-gateway
+          newName: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/api-gateway
+          newTag: stable
+        - name: microservices/user-service
+          newName: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/user-service
+          newTag: stable
+        - name: microservices/order-service
+          newName: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/order-service
+          newTag: stable
+  
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: microservices
+  
+  syncPolicy:
+    # Production requires manual sync
+    automated:
+      prune: false
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - Validate=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 5m
+  
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: ''
+      kind: Secret
+      jsonPointers:
+        - /data
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      jsonPointers:
+        - /spec/metrics
+  
+  revisionHistoryLimit: 20
+---
+# Production API Gateway with Canary
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: api-gateway-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: microservices
+  source:
+    repoURL: https://github.com/your-org/microservices-platform.git
+    targetRevision: main
+    path: helm/charts/api-gateway
+    helm:
+      valueFiles:
+        - values-prod.yaml
+      parameters:
+        - name: image.tag
+          value: stable
+        - name: replicaCount
+          value: "5"
+        - name: canary.enabled
+          value: "true"
+        - name: canary.weight
+          value: "10"
+        - name: resources.requests.cpu
+          value: "500m"
+        - name: resources.requests.memory
+          value: "512Mi"
+        - name: resources.limits.cpu
+          value: "1000m"
+        - name: resources.limits.memory
+          value: "1Gi"
+        - name: autoscaling.enabled
+          value: "true"
+        - name: autoscaling.minReplicas
+          value: "5"
+        - name: autoscaling.maxReplicas
+          value: "50"
+        - name: podDisruptionBudget.enabled
+          value: "true"
+        - name: podDisruptionBudget.minAvailable
+          value: "3"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: api-gateway
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Production User Service
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: user-service-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: microservices
+  source:
+    repoURL: https://github.com/your-org/microservices-platform.git
+    targetRevision: main
+    path: helm/charts/user-service
+    helm:
+      valueFiles:
+        - values-prod.yaml
+      parameters:
+        - name: image.tag
+          value: stable
+        - name: replicaCount
+          value: "5"
+        - name: autoscaling.enabled
+          value: "true"
+        - name: autoscaling.minReplicas
+          value: "5"
+        - name: autoscaling.maxReplicas
+          value: "30"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: user-service
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Production Order Service
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: order-service-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: microservices
+  source:
+    repoURL: https://github.com/your-org/microservices-platform.git
+    targetRevision: main
+    path: helm/charts/order-service
+    helm:
+      valueFiles:
+        - values-prod.yaml
+      parameters:
+        - name: image.tag
+          value: stable
+        - name: replicaCount
+          value: "5"
+        - name: autoscaling.enabled
+          value: "true"
+        - name: autoscaling.minReplicas
+          value: "5"
+        - name: autoscaling.maxReplicas
+          value: "40"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: order-service
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Production Monitoring Stack
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: microservices
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 55.0.0
+    helm:
+      releaseName: prometheus
+      values: |
+        prometheus:
+          prometheusSpec:
+            retention: 30d
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: gp3
+                  resources:
+                    requests:
+                      storage: 500Gi
+            resources:
+              requests:
+                cpu: 1000m
+                memory: 2Gi
+              limits:
+                cpu: 2000m
+                memory: 4Gi
+            replicas: 2
+            thanos:
+              objectStorageConfig:
+                key: thanos.yaml
+                name: thanos-objstore-config
+        grafana:
+          enabled: true
+          replicas: 2
+          adminPassword: '${GRAFANA_ADMIN_PASSWORD}'
+          ingress:
+            enabled: true
+            hosts:
+              - grafana.microservices.local
+            tls:
+              - secretName: grafana-tls
+                hosts:
+                  - grafana.microservices.local
+          persistence:
+            enabled: true
+            size: 10Gi
+          env:
+            GF_AUTH_GENERIC_OAUTH_ENABLED: "true"
+            GF_AUTH_GENERIC_OAUTH_NAME: "SSO"
+            GF_AUTH_GENERIC_OAUTH_ALLOW_SIGN_UP: "true"
+            GF_AUTH_GENERIC_OAUTH_CLIENT_ID: '${OAUTH_CLIENT_ID}'
+            GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET: '${OAUTH_CLIENT_SECRET}'
+            GF_AUTH_GENERIC_OAUTH_SCOPES: "openid profile email"
+            GF_AUTH_GENERIC_OAUTH_AUTH_URL: "https://auth.microservices.local/oauth/authorize"
+            GF_AUTH_GENERIC_OAUTH_TOKEN_URL: "https://auth.microservices.local/oauth/token"
+            GF_AUTH_GENERIC_OAUTH_API_URL: "https://auth.microservices.local/oauth/userinfo"
+        alertmanager:
+          enabled: true
+          config:
+            global:
+              slack_api_url: '${SLACK_WEBHOOK_URL}'
+              pagerduty_url: '${PAGERDUTY_URL}'
+            route:
+              receiver: 'default'
+              routes:
+                - match:
+                    severity: critical
+                  receiver: 'pagerduty'
+                  continue: true
+                - match:
+                    severity: warning
+                  receiver: 'slack'
+            receivers:
+              - name: 'default'
+                slack_configs:
+                  - channel: '#alerts'
+                    send_resolved: true
+              - name: 'pagerduty'
+                pagerduty_configs:
+                  - service_key: '${PAGERDUTY_SERVICE_KEY}'
+                    severity: critical
+              - name: 'slack'
+                slack_configs:
+                  - channel: '#warnings'
+                    send_resolved: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    syncWave: 1
+---
+# Production ApplicationSet for Supporting Services
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: microservices-appset-prod
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - service: payment-service
+            namespace: payment-service
+            replicas: 5
+            minReplicas: 5
+            maxReplicas: 20
+          - service: inventory-service
+            namespace: inventory-service
+            replicas: 5
+            minReplicas: 5
+            maxReplicas: 25
+          - service: notification-service
+            namespace: notification-service
+            replicas: 3
+            minReplicas: 3
+            maxReplicas: 15
+  template:
+    metadata:
+      name: '{{service}}-prod'
+      labels:
+        environment: production
+        service: '{{service}}'
+      annotations:
+        notifications.argoproj.io/subscribe.on-sync-succeeded.slack: deployments
+        notifications.argoproj.io/subscribe.on-sync-failed.slack: deployments
+    spec:
+      project: microservices
+      source:
+        repoURL: https://github.com/your-org/microservices-platform.git
+        targetRevision: main
+        path: helm/charts/{{service}}
+        helm:
+          valueFiles:
+            - values-prod.yaml
+          parameters:
+            - name: replicaCount
+              value: '{{replicas}}'
+            - name: image.tag
+              value: stable
+            - name: autoscaling.enabled
+              value: "true"
+            - name: autoscaling.minReplicas
+              value: '{{minReplicas}}'
+            - name: autoscaling.maxReplicas
+              value: '{{maxReplicas}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'
+      syncPolicy:
+        automated:
+          prune: false
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

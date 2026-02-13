@@ -1,0 +1,363 @@
+name: CD - Deploy to Environments
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'services/**'
+      - 'kubernetes/**'
+      - 'helm/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      service:
+        description: 'Service to deploy (leave empty for all)'
+        required: false
+        type: string
+
+env:
+  AWS_REGION: us-west-2
+  ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com
+
+jobs:
+  # =============================================================================
+  # Determine Environment
+  # =============================================================================
+  determine-environment:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.set-env.outputs.environment }}
+      cluster_name: ${{ steps.set-env.outputs.cluster_name }}
+      namespace: ${{ steps.set-env.outputs.namespace }}
+    steps:
+      - name: Set environment
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "environment=${{ github.event.inputs.environment }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" == "refs/heads/develop" ]; then
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          fi
+          
+          ENV=$(cat $GITHUB_OUTPUT | grep environment | cut -d= -f2)
+          echo "cluster_name=microservices-${ENV}" >> $GITHUB_OUTPUT
+          echo "namespace=microservices" >> $GITHUB_OUTPUT
+
+  # =============================================================================
+  # Deploy to Development
+  # =============================================================================
+  deploy-dev:
+    runs-on: ubuntu-latest
+    needs: determine-environment
+    if: needs.determine-environment.outputs.environment == 'dev'
+    environment:
+      name: development
+      url: https://api-dev.microservices.local
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ needs.determine-environment.outputs.cluster_name }}
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.13.0'
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'v1.29.0'
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install microservices ./helm/charts/microservices \
+            --namespace ${{ needs.determine-environment.outputs.namespace }} \
+            --create-namespace \
+            --values helm/values/values-dev.yaml \
+            --set global.image.tag=${{ github.sha }} \
+            --set global.environment=dev \
+            --wait \
+            --timeout 10m \
+            --atomic
+
+      - name: Verify deployment
+        run: |
+          kubectl rollout status deployment/api-gateway -n api-gateway --timeout=300s
+          kubectl rollout status deployment/user-service -n user-service --timeout=300s
+          kubectl rollout status deployment/order-service -n order-service --timeout=300s
+
+      - name: Run smoke tests
+        run: |
+          kubectl run smoke-test --rm -i --restart=Never \
+            --image=curlimages/curl:latest \
+            -- curl -sf http://api-gateway.api-gateway.svc.cluster.local/health
+
+      - name: Notify deployment
+        uses: 8398a7/action-slack@v3
+        if: always()
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          text: 'Deployed to Development - ${{ job.status }}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # =============================================================================
+  # Deploy to Staging
+  # =============================================================================
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [determine-environment, deploy-dev]
+    if: needs.determine-environment.outputs.environment == 'staging' || github.ref == 'refs/heads/main'
+    environment:
+      name: staging
+      url: https://api-staging.microservices.local
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name microservices-staging
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.13.0'
+
+      - name: Deploy with Helm
+        run: |
+          helm upgrade --install microservices ./helm/charts/microservices \
+            --namespace microservices \
+            --create-namespace \
+            --values helm/values/values-staging.yaml \
+            --set global.image.tag=${{ github.sha }} \
+            --set global.environment=staging \
+            --wait \
+            --timeout 15m \
+            --atomic
+
+      - name: Run staging tests
+        run: |
+          npm install -g newman
+          newman run tests/e2e/staging-tests.postman_collection.json \
+            --environment tests/e2e/staging.postman_environment.json
+
+      - name: Performance tests
+        run: |
+          docker run --rm loadimpact/k6 run \
+            --env API_URL=https://api-staging.microservices.local \
+            tests/performance/load-test.js
+
+      - name: Notify deployment
+        uses: 8398a7/action-slack@v3
+        if: always()
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          text: 'Deployed to Staging - ${{ job.status }}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # =============================================================================
+  # Deploy to Production
+  # =============================================================================
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [determine-environment, deploy-staging]
+    if: needs.determine-environment.outputs.environment == 'prod' || (github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch')
+    environment:
+      name: production
+      url: https://api.microservices.local
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name microservices-prod
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: 'v3.13.0'
+
+      - name: Create deployment PR
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: 'Deploy to Production - ${{ github.sha }}'
+          body: |
+            ## Production Deployment
+            
+            - Commit: ${{ github.sha }}
+            - Branch: ${{ github.ref }}
+            - Triggered by: ${{ github.actor }}
+            
+            ### Pre-deployment Checklist
+            - [ ] Staging tests passed
+            - [ ] Database migrations reviewed
+            - [ ] Rollback plan prepared
+            - [ ] On-call engineer notified
+          branch: deploy/production-${{ github.sha }}
+          base: main
+
+      - name: Canary deployment
+        run: |
+          # Deploy canary version (10% traffic)
+          helm upgrade --install microservices ./helm/charts/microservices \
+            --namespace microservices \
+            --values helm/values/values-prod.yaml \
+            --set global.image.tag=${{ github.sha }} \
+            --set api-gateway.canary.enabled=true \
+            --set api-gateway.canary.weight=10 \
+            --wait \
+            --timeout 15m
+
+      - name: Canary analysis
+        run: |
+          # Wait for metrics collection
+          sleep 300
+          
+          # Query Prometheus for error rate
+          ERROR_RATE=$(curl -s "http://prometheus.monitoring.svc.cluster.local:9090/api/v1/query?query=\
+            sum(rate(istio_requests_total{destination_service=~\"api-gateway.*\",response_code=~\"5..\"}[5m])) \
+            / sum(rate(istio_requests_total{destination_service=~\"api-gateway.*\"}[5m]))" | jq -r '.data.result[0].value[1]')
+          
+          echo "Error rate: $ERROR_RATE"
+          
+          # Fail if error rate > 1%
+          if (( $(echo "$ERROR_RATE > 0.01" | bc -l) )); then
+            echo "Error rate too high, rolling back"
+            exit 1
+          fi
+
+      - name: Promote to full deployment
+        if: success()
+        run: |
+          helm upgrade --install microservices ./helm/charts/microservices \
+            --namespace microservices \
+            --values helm/values/values-prod.yaml \
+            --set global.image.tag=${{ github.sha }} \
+            --set api-gateway.canary.enabled=false \
+            --wait \
+            --timeout 15m
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          helm rollback microservices 0 -n microservices
+          kubectl rollout status deployment/api-gateway -n api-gateway
+
+      - name: Run production smoke tests
+        run: |
+          curl -sf https://api.microservices.local/health || exit 1
+          curl -sf https://api.microservices.local/api/v1/users/health || exit 1
+
+      - name: Notify deployment
+        uses: 8398a7/action-slack@v3
+        if: always()
+        with:
+          status: ${{ job.status }}
+          channel: '#deployments'
+          text: 'Deployed to Production - ${{ job.status }}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: Create release
+        if: success()
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.run_number }}
+          release_name: Release v${{ github.run_number }}
+          body: |
+            ## Changes in this Release
+            - Commit: ${{ github.sha }}
+            - Deployed by: ${{ github.actor }}
+            
+            ### Services Updated
+            - API Gateway
+            - User Service
+            - Order Service
+            
+            ### Deployment Info
+            - Environment: Production
+            - Cluster: microservices-prod
+            - Namespace: microservices
+          draft: false
+          prerelease: false
+
+  # =============================================================================
+  # ArgoCD Sync
+  # =============================================================================
+  argocd-sync:
+    runs-on: ubuntu-latest
+    needs: determine-environment
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Install ArgoCD CLI
+        run: |
+          curl -sSL -o argocd-linux-amd64 https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd
+
+      - name: Login to ArgoCD
+        run: |
+          argocd login ${{ secrets.ARGOCD_SERVER }} \
+            --username ${{ secrets.ARGOCD_USERNAME }} \
+            --password ${{ secrets.ARGOCD_PASSWORD }} \
+            --insecure
+
+      - name: Sync applications
+        run: |
+          argocd app sync microservices-dev --prune
+          argocd app wait microservices-dev --health
+
+      - name: Verify sync
+        run: |
+          argocd app get microservices-dev

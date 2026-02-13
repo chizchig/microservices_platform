@@ -1,0 +1,287 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: microservices-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  labels:
+    environment: dev
+    project: microservices
+spec:
+  project: microservices
+  
+  source:
+    repoURL: https://github.com/your-org/microservices-platform.git
+    targetRevision: develop
+    path: kubernetes/overlays/dev
+    
+    # Kustomize configuration
+    kustomize:
+      namePrefix: dev-
+      commonLabels:
+        environment: dev
+      images:
+        - name: microservices/api-gateway
+          newName: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/api-gateway
+          newTag: latest
+        - name: microservices/user-service
+          newName: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/user-service
+          newTag: latest
+        - name: microservices/order-service
+          newName: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-west-2.amazonaws.com/order-service
+          newTag: latest
+  
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: microservices
+  
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+      allowEmpty: false
+    syncOptions:
+      - CreateNamespace=true
+      - PrunePropagationPolicy=foreground
+      - PruneLast=true
+      - Validate=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      jsonPointers:
+        - /spec/replicas
+    - group: ''
+      kind: Secret
+      jsonPointers:
+        - /data
+    - group: autoscaling
+      kind: HorizontalPodAutoscaler
+      jsonPointers:
+        - /spec/metrics
+  
+  revisionHistoryLimit: 10
+---
+# API Gateway Application
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: api-gateway-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: microservices
+  source:
+    repoURL: https://github.com/your-org/microservices-platform.git
+    targetRevision: develop
+    path: kubernetes/base/deployments
+    directory:
+      include: api-gateway.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: api-gateway
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# User Service Application
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: user-service-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: microservices
+  source:
+    repoURL: https://github.com/your-org/microservices-platform.git
+    targetRevision: develop
+    path: kubernetes/base/deployments
+    directory:
+      include: user-service.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: user-service
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Order Service Application
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: order-service-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: microservices
+  source:
+    repoURL: https://github.com/your-org/microservices-platform.git
+    targetRevision: develop
+    path: helm/charts/order-service
+    helm:
+      valueFiles:
+        - values-dev.yaml
+      parameters:
+        - name: image.tag
+          value: latest
+        - name: replicaCount
+          value: "2"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: order-service
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+---
+# Istio Configuration Application
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: istio-config-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: microservices
+  source:
+    repoURL: https://github.com/your-org/microservices-platform.git
+    targetRevision: develop
+    path: kubernetes/base/istio
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: istio-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+  ignoreDifferences:
+    - group: networking.istio.io
+      kind: Gateway
+      jsonPointers:
+        - /spec/servers/0/tls/credentialName
+---
+# Monitoring Stack Application
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring-dev
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: microservices
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: 55.0.0
+    helm:
+      releaseName: prometheus
+      values: |
+        prometheus:
+          prometheusSpec:
+            retention: 7d
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  resources:
+                    requests:
+                      storage: 50Gi
+        grafana:
+          enabled: true
+          adminPassword: admin123
+          ingress:
+            enabled: true
+            hosts:
+              - grafana-dev.microservices.local
+        alertmanager:
+          enabled: true
+          config:
+            global:
+              slack_api_url: '${SLACK_WEBHOOK_URL}'
+            route:
+              receiver: 'slack'
+            receivers:
+              - name: 'slack'
+                slack_configs:
+                  - channel: '#alerts'
+                    send_resolved: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+    syncWave: 1
+---
+# ApplicationSet for Multiple Services
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: microservices-appset-dev
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - service: payment-service
+            namespace: payment-service
+            replicas: 2
+          - service: inventory-service
+            namespace: inventory-service
+            replicas: 2
+          - service: notification-service
+            namespace: notification-service
+            replicas: 2
+  template:
+    metadata:
+      name: '{{service}}-dev'
+      labels:
+        environment: dev
+        service: '{{service}}'
+    spec:
+      project: microservices
+      source:
+        repoURL: https://github.com/your-org/microservices-platform.git
+        targetRevision: develop
+        path: helm/charts/{{service}}
+        helm:
+          parameters:
+            - name: replicaCount
+              value: '{{replicas}}'
+            - name: image.tag
+              value: latest
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: '{{namespace}}'
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
